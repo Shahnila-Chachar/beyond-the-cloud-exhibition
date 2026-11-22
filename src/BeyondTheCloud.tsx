@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Play, Pause, RotateCcw, Maximize2, Minimize2, ArrowRight, Eye, Layers } from 'lucide-react';
 
@@ -44,22 +44,22 @@ const INSPECTABLES: Record<string, InspectionInfo> = {
     detail: 'Multi-socket server blades execute application logic, container workloads, and API orchestration.',
   },
   storageArray: {
-    title: 'Distributed NVMe Storage Pool',
+    title: 'Shared Storage Systems',
     subtitle: 'Persistent State & Replication',
     detail: 'Sub-millisecond flash arrays read and replicate structured records across redundant availability zones.',
   },
   trafficCamera: {
-    title: 'Optical & LiDAR Mast Sensor',
+    title: 'Traffic Camera',
     subtitle: 'High-Bitrate Edge Data Source',
-    detail: 'Captures 60fps raw video and acoustic telemetry—too bandwidth-heavy to stream raw to a distant cloud.',
+    detail: 'Provides a local view of the intersection. A nearby system can analyze selected data and send a summary onward.',
   },
   edgeGateway: {
     title: 'Curbside Edge Compute Node',
     subtitle: 'Local Inference & Real-Time Control',
-    detail: 'Runs a local vision model directly at the intersection, detecting emergency sirens without WAN round-trips.',
+    detail: 'Processes the illustrated event near the intersection so the signal can respond without waiting for a remote service.',
   },
   trafficSignal: {
-    title: 'Signal Controller Actuation',
+    title: 'Traffic Signal Controller',
     subtitle: 'Deterministic Local Response',
     detail: 'Receives the local override command from the edge gateway and clears the intersection lane immediately.',
   },
@@ -74,7 +74,7 @@ export default function BeyondTheCloud() {
   const [inspected, setInspected] = useState<InspectionInfo | null>(null);
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState<boolean>(true);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState<boolean>(false);
+  const [hasEntered, setHasEntered] = useState<boolean>(false);
 
   const stateRef = useRef({
     chapter: 'studio' as SceneChapter,
@@ -87,10 +87,8 @@ export default function BeyondTheCloud() {
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    setPrefersReducedMotion(mq.matches);
     stateRef.current.reducedMotion = mq.matches;
     const handler = (e: MediaQueryListEvent) => {
-      setPrefersReducedMotion(e.matches);
       stateRef.current.reducedMotion = e.matches;
     };
     mq.addEventListener('change', handler);
@@ -150,6 +148,31 @@ export default function BeyondTheCloud() {
     }
   };
 
+  const stepForward = () => {
+    const next = Math.min(1, stateRef.current.progress + 0.12);
+    stateRef.current.progress = next;
+    stateRef.current.isPlaying = false;
+    setIsPlaying(false);
+    setSimProgress(next);
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLElement && ['INPUT', 'BUTTON'].includes(event.target.tagName)) return;
+      if (event.code === 'Space') {
+        event.preventDefault();
+        isPlaying ? setIsPlaying(false) : triggerSimulation();
+      } else if (event.code === 'ArrowRight') {
+        event.preventDefault();
+        stepForward();
+      } else if (event.key.toLowerCase() === 'f') {
+        toggleFullscreen();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isPlaying]);
+
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
@@ -166,9 +189,15 @@ export default function BeyondTheCloud() {
     );
     camera.position.set(...CAMERA_POSES.studio.pos);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    } catch {
+      container.innerHTML = '<div style="display:grid;height:100%;place-items:center;padding:2rem;color:#cbd5e1;font:14px system-ui;text-align:center">This browser could not start WebGL. Try enabling hardware acceleration or opening the experience in a WebGL capable browser.</div>';
+      return () => { container.replaceChildren(); };
+    }
     renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -181,7 +210,7 @@ export default function BeyondTheCloud() {
     const keyLight = new THREE.DirectionalLight('#f4f7ff', 1.8);
     keyLight.position.set(18, 32, 22);
     keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(2048, 2048);
+    keyLight.shadow.mapSize.set(1024, 1024);
     keyLight.shadow.camera.near = 2;
     keyLight.shadow.camera.far = 95;
     const d = 38;
@@ -239,6 +268,33 @@ export default function BeyondTheCloud() {
     });
 
     const interactiveMeshes: THREE.Object3D[] = [];
+    const addSceneLabel = (parent: THREE.Object3D, text: string, position: [number, number, number], width = 2.7) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.fillStyle = 'rgba(8, 15, 25, 0.88)';
+      ctx.beginPath();
+      ctx.roundRect(8, 8, 496, 112, 18);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(94, 204, 255, 0.78)';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.fillStyle = '#e8f5ff';
+      ctx.font = '600 38px Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text.toUpperCase(), 256, 64, 460);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+      label.position.set(...position);
+      label.scale.set(width, width * 0.25, 1);
+      label.renderOrder = 5;
+      parent.add(label);
+      return label;
+    };
     const registerInteractive = (obj: THREE.Object3D, key: string) => {
       obj.traverse((child) => {
         if ((child as THREE.Mesh).isMesh) {
@@ -292,6 +348,7 @@ export default function BeyondTheCloud() {
     laptopGroup.add(laptopLid);
     studioGroup.add(laptopGroup);
     registerInteractive(laptopGroup, 'laptop');
+    addSceneLabel(laptopGroup, 'Client laptop', [0, 1.45, 0.1], 2.3);
 
     const routerGroup = new THREE.Group();
     routerGroup.position.set(2.1, 1.91, -0.5);
@@ -309,6 +366,7 @@ export default function BeyondTheCloud() {
     routerGroup.add(routerLed);
     studioGroup.add(routerGroup);
     registerInteractive(routerGroup, 'router');
+    addSceneLabel(routerGroup, 'Wi-Fi router', [0, 0.65, 0], 2.2);
 
     // ZONE 2: HYPERSCALE DATA CENTER HALL
     const dcGroup = new THREE.Group();
@@ -342,6 +400,7 @@ export default function BeyondTheCloud() {
     }
     dcGroup.add(spineGroup);
     registerInteractive(spineGroup, 'spineSwitch');
+    addSceneLabel(spineGroup, 'Network switch', [0, 5.0, 0], 2.7);
 
     const computeGroup = new THREE.Group();
     computeGroup.position.set(0, 0.3, -0.5);
@@ -366,6 +425,7 @@ export default function BeyondTheCloud() {
     });
     dcGroup.add(computeGroup);
     registerInteractive(computeGroup, 'computeRack');
+    addSceneLabel(computeGroup, 'Compute servers', [0, 5.8, 0], 3.1);
 
     const storageGroup = new THREE.Group();
     storageGroup.position.set(4.5, 0.3, -3.2);
@@ -386,6 +446,7 @@ export default function BeyondTheCloud() {
     }
     dcGroup.add(storageGroup);
     registerInteractive(storageGroup, 'storageArray');
+    addSceneLabel(storageGroup, 'Storage system', [0, 5.1, 0], 2.7);
 
     const trayMat = new THREE.MeshStandardMaterial({ color: '#334155', metalness: 0.7, roughness: 0.3 });
     const overheadTray = new THREE.Mesh(new THREE.BoxGeometry(10.5, 0.14, 0.7), trayMat);
@@ -441,6 +502,7 @@ export default function BeyondTheCloud() {
     cameraMastGroup.add(camLens);
     cityGroup.add(cameraMastGroup);
     registerInteractive(cameraMastGroup, 'trafficCamera');
+    addSceneLabel(cameraMastGroup, 'Traffic camera', [0.25, 5.0, 0.3], 2.6);
 
     const edgeNodeGroup = new THREE.Group();
     edgeNodeGroup.position.set(0.4, 0.24, -3.2);
@@ -459,6 +521,7 @@ export default function BeyondTheCloud() {
     edgeNodeGroup.add(edgeStatusBar);
     cityGroup.add(edgeNodeGroup);
     registerInteractive(edgeNodeGroup, 'edgeGateway');
+    addSceneLabel(edgeNodeGroup, 'Edge gateway', [0, 2.15, 0], 2.5);
 
     const signalGroup = new THREE.Group();
     signalGroup.position.set(3.8, 0.24, -3.2);
@@ -495,9 +558,11 @@ export default function BeyondTheCloud() {
     signalGroup.add(greenLamp);
     cityGroup.add(signalGroup);
     registerInteractive(signalGroup, 'trafficSignal');
+    addSceneLabel(signalGroup, 'Traffic signal', [0, 5.7, 2.2], 2.4);
 
     const ambulanceGroup = new THREE.Group();
     ambulanceGroup.position.set(-5.8, 0.12, 2.3);
+    addSceneLabel(ambulanceGroup, 'Emergency vehicle', [0, 1.75, 0], 3.0);
     const ambBody = new THREE.Mesh(
       new THREE.BoxGeometry(2.6, 1.15, 1.15),
       new THREE.MeshStandardMaterial({ color: '#f8fafc', roughness: 0.3, metalness: 0.2 })
@@ -571,6 +636,18 @@ export default function BeyondTheCloud() {
       '#2dd4bf'
     );
 
+    const cityToCloudCurve = createConduit(
+      [
+        new THREE.Vector3(19.6, 4.4, -2.8),
+        new THREE.Vector3(15.2, 1.6, -3.2),
+        new THREE.Vector3(10.2, 0.35, -4.2),
+        new THREE.Vector3(4.5, 0.35, -4.2),
+        new THREE.Vector3(-0.8, 0.9, -2.3),
+        new THREE.Vector3(-4.2, 2.4, 0.5),
+      ],
+      '#38bdf8'
+    );
+
     const edgeToCloudCurve = createConduit(
       [
         new THREE.Vector3(22.4, 1.2, -3.2),
@@ -581,7 +658,7 @@ export default function BeyondTheCloud() {
       '#64748b'
     );
 
-    const makePacket = (color: string, radius = 0.18) => {
+    const makePacket = (color: string, label: string, radius = 0.18) => {
       const mesh = new THREE.Mesh(
         new THREE.SphereGeometry(radius, 20, 20),
         new THREE.MeshStandardMaterial({
@@ -592,13 +669,14 @@ export default function BeyondTheCloud() {
       );
       mesh.visible = false;
       scene.add(mesh);
+      addSceneLabel(mesh, label, [0, 0.55, 0], 2.6);
       return mesh;
     };
 
-    const cloudPacket = makePacket('#38bdf8', 0.2);
-    const dcPacket = makePacket('#a78bfa', 0.2);
-    const edgePacket = makePacket('#2dd4bf', 0.18);
-    const syncPacket = makePacket('#94a3b8', 0.14);
+    const cloudPacket = makePacket('#38bdf8', 'Cloud request', 0.2);
+    const dcPacket = makePacket('#a78bfa', 'Data center request', 0.2);
+    const edgePacket = makePacket('#2dd4bf', 'Local edge event', 0.18);
+    const syncPacket = makePacket('#94a3b8', 'Cloud summary', 0.14);
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -657,6 +735,7 @@ export default function BeyondTheCloud() {
     const desiredLookAt = new THREE.Vector3();
 
     let lastTime = performance.now();
+    let lastUiUpdate = 0;
     let frameId = 0;
 
     const animate = (now: number) => {
@@ -669,7 +748,10 @@ export default function BeyondTheCloud() {
       if (st.isPlaying) {
         const speed = st.chapter === 'comparison' ? 0.14 : 0.18;
         st.progress = Math.min(1, st.progress + dt * speed);
-        setSimProgress(st.progress);
+        if (now - lastUiUpdate > 120) {
+          setSimProgress(st.progress);
+          lastUiUpdate = now;
+        }
         if (st.progress >= 1) {
           st.isPlaying = false;
           setIsPlaying(false);
@@ -712,14 +794,14 @@ export default function BeyondTheCloud() {
             dcInternalCurve.getPointAt(Math.sin(t * Math.PI) * 0.85, cloudPacket.position);
             computeLedMat.emissiveIntensity = 2.5;
             storageLedMat.emissiveIntensity = 2.2;
-            setStatusLine('3/4  Remote cloud compute cluster executes logic and queries NVMe storage');
+            setStatusLine('3 / 4 · A server processes the request and retrieves data');
           } else {
             const t = 1 - (p - 0.65) / 0.35;
             studioToCloudCurve.getPointAt(Math.max(0, t), cloudPacket.position);
             setStatusLine(
               p >= 0.99
-                ? '4/4  Response delivered to workstation — Round-trip complete'
-                : '4/4  Serialized response travels back across the WAN to the workstation'
+                ? '4 / 4 - Response delivered - round trip complete'
+                : '4 / 4 - Response travels back across the network'
             );
           }
 
@@ -738,20 +820,20 @@ export default function BeyondTheCloud() {
             const t = p / 0.33;
             dcInternalCurve.getPointAt(t * 0.33, dcPacket.position);
             spineLedMat.emissiveIntensity = 2.6;
-            setStatusLine('1/3  Ingress border router & spine-leaf fabric inspect and route packet');
+            setStatusLine('1 / 3 - Network switches route the incoming request');
           } else if (p < 0.68) {
             const t = (p - 0.33) / 0.35;
             dcInternalCurve.getPointAt(0.33 + t * 0.37, dcPacket.position);
             computeLedMat.emissiveIntensity = 2.8;
-            setStatusLine('2/3  Compute blades execute containerized service logic');
+            setStatusLine('2 / 3 - Compute servers handle the request');
           } else {
             const t = (p - 0.68) / 0.32;
             dcInternalCurve.getPointAt(0.7 + t * 0.3, dcPacket.position);
             storageLedMat.emissiveIntensity = 2.8;
             setStatusLine(
               p >= 0.99
-                ? '3/3  Distributed NVMe storage commits state & returns response via leaf switch'
-                : '3/3  Querying distributed NVMe storage pool for persistent state'
+                ? '3 / 3 · Storage provides data for the response'
+                : '3 / 3 · The service reads the data it needs from storage'
             );
           }
         }
@@ -767,20 +849,20 @@ export default function BeyondTheCloud() {
             edgePacket.visible = true;
             const t = p / 0.3;
             edgeLocalCurve.getPointAt(t * 0.5, edgePacket.position);
-            setStatusLine('1/3  Optical mast sensor detects approaching emergency vehicle locally');
+            setStatusLine('1 / 3 - Camera detects the approaching emergency vehicle');
           } else if (p < 0.6) {
             edgePacket.visible = true;
             const t = (p - 0.3) / 0.3;
             edgeLocalCurve.getPointAt(0.5 + t * 0.5, edgePacket.position);
             edgeStatusMat.emissiveIntensity = 2.8;
-            setStatusLine('2/3  Curbside edge gateway runs inference locally—zero cloud round-trip needed');
+            setStatusLine('2 / 3 · Nearby edge gateway processes the event locally');
           } else {
             redLampMat.emissiveIntensity = 0.05;
             greenLampMat.emissiveIntensity = 2.4;
             setStatusLine(
               st.cloudSyncEnabled
-                ? '3/3  Intersection cleared locally; anonymized event summary syncs to cloud'
-                : '3/3  Intersection cleared autonomously at the edge without WAN dependency'
+                ? '3 / 3 - Signal changes locally - a summary is sent to the cloud'
+                : '3 / 3 · Signal changes locally · Cloud sync is off'
             );
 
             if (st.cloudSyncEnabled) {
@@ -809,20 +891,20 @@ export default function BeyondTheCloud() {
 
           cloudPacket.visible = true;
           if (p < 0.45) {
-            studioToCloudCurve.getPointAt(p / 0.45, cloudPacket.position);
+            cityToCloudCurve.getPointAt(p / 0.45, cloudPacket.position);
           } else if (p < 0.65) {
             dcInternalCurve.getPointAt(((p - 0.45) / 0.2) * 0.85, cloudPacket.position);
             computeLedMat.emissiveIntensity = 2.6;
           } else {
-            studioToCloudCurve.getPointAt(Math.max(0, 1 - (p - 0.65) / 0.35), cloudPacket.position);
+            cityToCloudCurve.getPointAt(Math.max(0, 1 - (p - 0.65) / 0.35), cloudPacket.position);
           }
 
           if (p < 0.26) {
-            setStatusLine('Simultaneous Trigger — Edge packet reaches curbside node while Cloud packet enters WAN');
+            setStatusLine('Both paths start together - edge handles the nearby event');
           } else if (p < 0.99) {
-            setStatusLine('Edge actuation already complete (Signal Green) — Cloud workload still traversing WAN');
+            setStatusLine('The local signal has changed - the cloud request is still in transit');
           } else {
-            setStatusLine('Comparison Complete — Edge handles immediate local control; Cloud handles centralized scale');
+            setStatusLine('Comparison complete - cloud and edge serve different needs');
           }
         }
       }
@@ -863,7 +945,19 @@ export default function BeyondTheCloud() {
     <div className="relative w-screen h-screen overflow-hidden bg-[#090d14] text-slate-100 select-none font-sans">
       <div ref={mountRef} className="absolute inset-0 w-full h-full" />
 
-      <header className="pointer-events-none absolute top-0 left-0 right-0 z-20 flex items-start justify-between px-8 pt-7">
+      {!hasEntered && (
+        <div className="absolute inset-0 z-30 flex items-end bg-gradient-to-r from-[#080d15]/95 via-[#080d15]/55 to-transparent px-8 pb-28 pt-20 md:px-16">
+          <div className="max-w-2xl">
+            <p className="text-[10px] uppercase tracking-[0.32em] text-sky-300">An interactive journey through cloud networking &amp; edge computing</p>
+            <h2 className="mt-5 text-5xl font-light tracking-[-0.04em] text-white md:text-7xl">BEYOND<br />THE CLOUD</h2>
+            <p className="mt-5 max-w-lg text-sm leading-6 text-slate-300 md:text-base">Follow a request from a workstation to a distant data center, then see what changes when a decision happens nearby.</p>
+            <button onClick={() => setHasEntered(true)} className="mt-8 inline-flex items-center gap-3 border border-sky-300/50 bg-sky-300/10 px-5 py-3 text-xs tracking-[0.16em] text-white transition hover:bg-sky-300/20">ENTER THE NETWORK <ArrowRight className="h-4 w-4" /></button>
+            <p className="mt-4 text-[10px] uppercase tracking-[0.2em] text-slate-500">Educational visualization · simulated network paths</p>
+          </div>
+        </div>
+      )}
+
+      <header className={`pointer-events-none absolute top-0 left-0 right-0 z-20 flex items-start justify-between px-8 pt-7 transition-opacity ${hasEntered ? 'opacity-100' : 'opacity-0'}`}>
         <div className="max-w-md">
           <p className="text-[11px] uppercase tracking-[0.26em] text-slate-400 font-medium">
             Interactive Spatial Exhibition
@@ -957,10 +1051,23 @@ export default function BeyondTheCloud() {
               Immediate local processing adjacent to sensors and physical actuators.
             </p>
           </div>
+          <div className="mt-1 w-64 space-y-3">
+            <div>
+              <div className="flex justify-between text-[10px] uppercase tracking-wider text-slate-400"><span>Cloud process</span><span>{Math.round(simProgress * 100)}%</span></div>
+              <div className="mt-1 h-1 bg-slate-800"><div className="h-full bg-sky-400 transition-[width]" style={{ width: `${simProgress * 100}%` }} /></div>
+              <p className="mt-1 text-[10px] text-slate-500">Camera event → WAN → server → return</p>
+            </div>
+            <div>
+              <div className="flex justify-between text-[10px] uppercase tracking-wider text-slate-400"><span>Edge process</span><span>{Math.round(Math.min(1, simProgress / 0.26) * 100)}%</span></div>
+              <div className="mt-1 h-1 bg-slate-800"><div className="h-full bg-teal-400 transition-[width]" style={{ width: `${Math.min(1, simProgress / 0.26) * 100}%` }} /></div>
+              <p className="mt-1 text-[10px] text-slate-500">Same camera event → nearby gateway → signal</p>
+            </div>
+            <p className="text-[9px] uppercase tracking-wider text-slate-600">Illustrative timing, not a network measurement</p>
+          </div>
         </div>
       )}
 
-      <footer className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 px-8 pb-7">
+      <footer className={`pointer-events-none absolute bottom-0 left-0 right-0 z-20 px-8 pb-7 transition-opacity ${hasEntered ? 'opacity-100' : 'opacity-0'}`}>
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-t border-slate-800/80 pt-4">
           <div className="pointer-events-auto flex-1 max-w-2xl">
             <div className="flex items-center gap-2.5 text-xs text-slate-300">
@@ -1005,6 +1112,14 @@ export default function BeyondTheCloud() {
                 <span>Cloud Sync: {cloudSyncEnabled ? 'Active' : 'Offline'}</span>
               </button>
             )}
+
+            <button
+              onClick={stepForward}
+              title="Step forward (Right Arrow)"
+              className="flex items-center gap-2 border border-slate-800 px-3 py-2 text-xs text-slate-300 transition hover:border-slate-600 hover:text-white"
+            >
+              Step <ArrowRight className="h-3.5 w-3.5" />
+            </button>
 
             <button
               onClick={() => {
